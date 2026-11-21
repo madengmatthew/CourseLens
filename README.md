@@ -61,18 +61,74 @@
 
 ---
 
-### 🏗️ Architecture Highlights
+### 🏗️ Architecture Overview
 
-```text
-User Browser (Local-First Storage: IndexedDB + localStorage + Browser-Direct File Parsing)
-   │
-   ├──► Global Edge Entry: https://courselens.uk
-   │      └─ Cloudflare Workers + Static Assets + Edge Security (WAF / Rate Limit / TLS)
-   │
-   └──► Mainland China IPv6 Direct Entry: https://v6.courselens.uk:18443
-          └─ Dual-Stack Node.js Gateway + Caddy TLS (Let's Encrypt)
-          └─ Shared Cross-Subdomain Signed Cookie Auth (.courselens.uk)
+CourseLens follows a **Local-First + Stateless Edge Gateway + Dual-Region Access** architecture: your slides, notes, and API keys stay inside your own browser, while overseas and mainland China IPv6 users share unified HTTPS access and seamless single-unlock sessions.
+
+#### 1. Dual-Region Access & Security Architecture
+
+```mermaid
+flowchart TB
+    subgraph Users["👥 Users / 访问用户"]
+        U1["🌍 Overseas & VPN Users<br/>海外及挂 VPN 用户"]
+        U2["🇨🇳 Mainland China IPv6 Users<br/>中国大陆免 VPN IPv6 用户"]
+    end
+
+    subgraph Edge["☁️ Global Edge Layer (courselens.uk)"]
+        CF["Cloudflare Global Anycast Edge<br/>HTTPS / TLS 1.3 · WAF · Bot Protection · Rate Limiting"]
+        CFW["Stateless Edge Gateway & Static Delivery<br/>无状态边缘网关与全球静态资源分发"]
+    end
+
+    subgraph DirectV6["⚡ China IPv6 Direct Layer (v6.courselens.uk:18443)"]
+        TLS["TLS Termination Proxy<br/>Let's Encrypt 正式可信证书 · 自动续签与压缩"]
+        NODE["Dual-Stack Origin Gateway<br/>IPv6/IPv4 双栈服务端网关"]
+    end
+
+    subgraph Auth["🔐 Unified Access & Session Sync"]
+        COOKIE["Cross-Subdomain Signed HttpOnly Cookie<br/>跨子域签名会话（主站 ↔ CN 站一次验证双端免密）"]
+        QUOTA["Access Code & Anti-Brute-Force Engine<br/>8 位访问码校验 · 激活次数配额 · 错误尝试锁定"]
+    end
+
+    U1 -->|"HTTPS :443"| CF --> CFW
+    U2 -->|"Direct IPv6 HTTPS"| TLS --> NODE
+    CFW <-->|"Encrypted Sync Channel"| NODE
+    CFW --- COOKIE
+    NODE --- COOKIE
+    NODE --- QUOTA
 ```
+
+#### 2. Local-First Processing & Stateless AI Streaming Pipeline
+
+```mermaid
+flowchart LR
+    subgraph Browser["💻 User Browser Workbench (100% Local Data Ownership)"]
+        direction TB
+        DOCS["📄 Browser-Native File Parser<br/>PDF / PPTX / DOCX / HTML / MD / TXT<br/>纯浏览器分片提取，保留末页与习题"]
+        SPEC["🎛️ Pedagogy & Discipline Engine<br/>学科预设 · 讲解模块定制 · 双语术语约束"]
+        RENDER["⚡ Incremental Stream Renderer<br/>增量 DOM 渲染 · KaTeX 公式 · 互动测验"]
+        STORE["💾 Local Persistence<br/>IndexedDB 讲义库 · 本地偏好与 API Key<br/>支持一键 JSON 导出与跨设备恢复"]
+        EXPORT["🖨️ Client-Side Export Engine<br/>可搜索 PDF（分页防截断）· 离线交互 HTML"]
+        DOCS --> SPEC --> RENDER --> STORE
+        RENDER --> EXPORT
+    end
+
+    subgraph Relay["🔀 Stateless AI Relay (Zero Server Storage)"]
+        SSE["SSE Bidirectional Streaming Proxy<br/>实时流式转发 · 断线草稿保留 · 超时保护"]
+    end
+
+    subgraph Providers["🤖 BYOK Model Providers"]
+        LLM["OpenAI · Anthropic · Google Gemini<br/>OpenRouter · DeepSeek · Compatible APIs"]
+    end
+
+    SPEC -->|"User Prompt + BYOK Key (TLS)"| SSE
+    SSE -->|"HTTPS Streaming"| LLM
+    LLM -->|"Reasoning & Structured Sections"| SSE
+    SSE -->|"Chunked SSE Events"| RENDER
+```
+
+- **Zero Cloud Retention of Notes**: Lecture libraries, uploaded course materials, reading progress, and user API keys live exclusively in the browser (`IndexedDB` + `localStorage`). The gateway acts purely as a stateless streaming relay.
+- **Dual-Region Seamless Experience**: Global traffic routes through Cloudflare's edge network (`courselens.uk`), while mainland China users connect directly via Let's Encrypt HTTPS over IPv6 (`v6.courselens.uk:18443`). Signed `Domain=.courselens.uk` `HttpOnly` session cookies keep both endpoints synchronized without re-entering codes.
+- **Defense in Depth**: Strict Origin checks, WAF + IP-based rate limiting, brute-force lockout protection, CSP & security headers, and isolated access-control verification.
 
 ---
 
@@ -102,6 +158,15 @@ User Browser (Local-First Storage: IndexedDB + localStorage + Browser-Direct Fil
   - 内置**工作区 JSON 一键备份与恢复**（支持合并或替换），方便跨设备与跨浏览器迁移全部讲义和学习进度。
 
 ---
+
+### 🏗️ 系统架构详解（零云端留存 · 双站协同）
+
+详细交互架构图见上方 [Architecture Overview](#-architecture-overview)，核心设计分层如下：
+
+1. **双路由接入层**：海外与 VPN 用户通过 Cloudflare 全球边缘节点访问 `https://courselens.uk`；中国大陆用户无需 VPN，直接通过 IPv6 TLS（Let's Encrypt 正式证书）访问 `https://v6.courselens.uk:18443`，兼顾全球加速与国内直连可达性。
+2. **跨站免密鉴权层**：验证 8 位数字访问密码后下发跨子域签名 `HttpOnly` 会话凭证（`.courselens.uk`），同一设备在任一入口解锁后，切换到另一站点自动免密通行；配合防暴力破解锁定与访问码多端激活次数管理，保障站点访问安全。
+3. **纯浏览器解析与持久化层**：课件文本解析（`PDF` / `PPTX` / `DOCX` / `HTML` / `Markdown` / `TXT`）、可搜索 PDF 排版分页、离线交互 HTML 打包及讲义工作区存储均在用户本地浏览器完成，服务端不存储任何用户私人课件与笔记。
+4. **无状态模型流式转发层（BYOK）**：网关仅按会话实时转发用户自带密钥（OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek 等）的模型流式响应，支持增量 DOM 无闪烁渲染、思考过程展示、断线草稿续写与框选段落定向重写。
 
 <div align="center">
 
